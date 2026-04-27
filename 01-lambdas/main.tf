@@ -18,3 +18,21 @@ provider "aws" {
 # ------------------------------------------------------------------------------
 data "aws_caller_identity" "current" {} # Returns the AWS account ID and ARN
 data "aws_region" "current" {}          # Returns the currently configured region
+
+# --------------------------------------------------------------------------------
+# DATA: archive_file.lambdas_zip
+# --------------------------------------------------------------------------------
+# Description:
+#   Packages all Lambda source code from the local "code" directory into a ZIP
+#   archive. All six handler functions live in costs.py so a single ZIP serves
+#   every Lambda function defined in this module.
+#
+# Expected code layout:
+#   code/
+#     costs.py   — contains all six cost-query handler functions
+# --------------------------------------------------------------------------------
+data "archive_file" "lambdas_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/code"
+  output_path = "${path.module}/lambdas.zip"
+}

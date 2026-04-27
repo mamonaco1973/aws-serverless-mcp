@@ -1,49 +1,63 @@
-# CLAUDE.md — aws-crud-example
+# CLAUDE.md — aws-serverless-mcp
 
-A serverless notes CRUD API on AWS. Five Lambda functions handle one REST operation each, DynamoDB stores the data, API Gateway (HTTP API v2) routes requests, and a static S3 site provides a browser UI. This is the AWS reference implementation; GCP and Azure ports exist as parallel projects.
+A serverless AWS Cost Explorer API designed for MCP (Model Context Protocol) tool use.
+Six Lambda functions expose cost query tools behind an API Gateway HTTP API with
+AWS_IAM authorization. A local MCP proxy (built separately) signs requests with
+SigV4, making the remote serverless API transparent to the AI caller.
 
 ---
 
 ## What This Project Does
 
-Clients hit an API Gateway HTTP API that routes each operation to a dedicated Lambda function. DynamoDB persists the notes. A static HTML frontend served from S3 makes API calls directly to the API Gateway endpoint.
+An AI assistant calls MCP tools that appear local but are backed by Lambda functions
+running in AWS. Each tool queries the Cost Explorer API and returns a plain-text
+summary suitable for direct narration — not raw CE JSON.
 
 **Base URL after deploy:**
 ```
 https://{api-id}.execute-api.us-east-1.amazonaws.com
 ```
 
-| Method | Path | Lambda | Operation |
-|--------|------|--------|-----------|
-| POST | `/notes` | create-note | Create note |
-| GET | `/notes` | list-notes | List all notes |
-| GET | `/notes/{id}` | get-note | Get single note |
-| PUT | `/notes/{id}` | update-note | Update note |
-| DELETE | `/notes/{id}` | delete-note | Delete note |
+| Tool Name | Route | Lambda | Operation |
+|-----------|-------|--------|-----------|
+| get_month_to_date_cost | `POST /cost/month-to-date` | cost-mtd | MTD total spend |
+| get_cost_by_service | `POST /cost/by-service` | cost-by-service | Per-service breakdown |
+| compare_this_month_to_last_month | `POST /cost/compare-months` | cost-compare | MoM delta |
+| get_daily_cost_trend | `POST /cost/daily-trend` | cost-daily | Day-by-day spend |
+| find_top_cost_drivers | `POST /cost/top-drivers` | cost-top-drivers | Ranked services |
+| forecast_month_end_cost | `POST /cost/forecast` | cost-forecast | CE forecast |
 
 ---
 
 ## Architecture
 
 ```
-Browser / curl
-     │
+AI assistant (MCP client)
+     │  stdio / JSON-RPC
      ▼
-API Gateway (HTTP API v2) — notes-api
+Local MCP proxy  ← holds IAM credentials, signs with SigV4
+     │  HTTPS + AWS_IAM auth
+     ▼
+API Gateway (HTTP API v2) — costs-api
      │  routes by method + path
-     ├── POST   /notes        → Lambda: create-note  (create.py)
-     ├── GET    /notes        → Lambda: list-notes   (list.py)
-     ├── GET    /notes/{id}   → Lambda: get-note     (get.py)
-     ├── PUT    /notes/{id}   → Lambda: update-note  (update.py)
-     └── DELETE /notes/{id}  → Lambda: delete-note  (delete.py)
+     ├── POST /cost/month-to-date  → Lambda: cost-mtd
+     ├── POST /cost/by-service     → Lambda: cost-by-service
+     ├── POST /cost/compare-months → Lambda: cost-compare
+     ├── POST /cost/daily-trend    → Lambda: cost-daily
+     ├── POST /cost/top-drivers    → Lambda: cost-top-drivers
+     └── POST /cost/forecast       → Lambda: cost-forecast
                 │
                 ▼
-          DynamoDB table: notes
-          PK: owner (string)
-          SK: id    (string, UUID)
+          AWS Cost Explorer API (global, us-east-1 endpoint)
 ```
 
-**Why five functions instead of one:** The AWS pattern uses one Lambda per route with API Gateway handling routing. This is the idiomatic AWS approach; contrast with the GCP port which uses a single Cloud Function with internal routing (no API Gateway needed).
+**Why plain-text responses:** CE returns nested ResultsByTime arrays. Returning
+pre-formatted summaries lets the AI narrate results without parsing, and keeps
+the MCP tool contract simple.
+
+**Why IAM auth:** The proxy signs every request with the caller's AWS credentials.
+API Gateway enforces IAM authorization before the Lambda is invoked — no API keys
+to rotate and no unauthenticated access possible.
 
 ---
 
@@ -52,27 +66,19 @@ API Gateway (HTTP API v2) — notes-api
 ```
 01-lambdas/
   code/
-    create.py         Lambda: create a note
-    list.py           Lambda: list all notes
-    get.py            Lambda: get a note by ID
-    update.py         Lambda: update a note
-    delete.py         Lambda: delete a note
-  main.tf             Terraform: AWS provider, data sources
-  dynamodb.tf         Terraform: DynamoDB table (owner PK, id SK)
-  api.tf              Terraform: API Gateway HTTP API, routes, integrations, stages
-  lambda-post.tf      Terraform: IAM role + Lambda for create
-  lambda-list.tf      Terraform: IAM role + Lambda for list
-  lambda-get.tf       Terraform: IAM role + Lambda for get
-  lambda-update.tf    Terraform: IAM role + Lambda for update
-  lambda-delete.tf    Terraform: IAM role + Lambda for delete
-02-webapp/
-  index.html.tmpl     Web UI template — API_BASE injected at deploy time
-  main.tf             Terraform: AWS provider
-  s3.tf               Terraform: public S3 static site
-check_env.sh          Pre-flight: verify aws/terraform/jq, test AWS credentials
-apply.sh              Full deployment (both phases + validation)
-destroy.sh            Teardown in reverse order
-validate.sh           End-to-end CRUD smoke test via curl
+    costs.py              All six handler functions (single file, single ZIP)
+  main.tf                 Terraform: AWS provider, data sources, archive_file
+  api.tf                  Terraform: HTTP API, 6 routes (AWS_IAM), integrations, stage
+  lambda-mtd.tf           Terraform: IAM role + Lambda for cost-mtd
+  lambda-by-service.tf    Terraform: IAM role + Lambda for cost-by-service
+  lambda-compare.tf       Terraform: IAM role + Lambda for cost-compare
+  lambda-daily.tf         Terraform: IAM role + Lambda for cost-daily
+  lambda-top-drivers.tf   Terraform: IAM role + Lambda for cost-top-drivers
+  lambda-forecast.tf      Terraform: IAM role + Lambda for cost-forecast
+check_env.sh              Pre-flight: verify aws/terraform/jq, test AWS credentials
+apply.sh                  Full deployment + validation
+destroy.sh                Teardown
+validate.sh               Smoke test via direct Lambda invocation (bypasses IAM auth)
 ```
 
 ---
@@ -80,8 +86,10 @@ validate.sh           End-to-end CRUD smoke test via curl
 ## Prerequisites
 
 - `aws`, `terraform`, `jq` in PATH
-- AWS credentials configured (environment variables or `~/.aws/credentials`)
-- Sufficient IAM permissions: Lambda, DynamoDB, API Gateway, S3, IAM
+- AWS credentials configured with permissions:
+  - Lambda, API Gateway, IAM (for deploy)
+  - `ce:GetCostAndUsage`, `ce:GetCostForecast` (for the Lambda execution roles)
+- Cost Explorer must be enabled in the AWS account (Console → Billing → Cost Explorer)
 
 ---
 
@@ -98,66 +106,55 @@ validate.sh           End-to-end CRUD smoke test via curl
 ./validate.sh
 ```
 
-`apply.sh` runs in two phases:
+`apply.sh` runs in one phase:
 1. **`check_env.sh`** → validates tools and AWS credentials
-2. **`01-lambdas`** → deploys DynamoDB, all five Lambdas, API Gateway, IAM roles
-3. Looks up API Gateway endpoint via `aws apigatewayv2 get-apis`, injects into `index.html.tmpl` via `envsubst`
-4. **`02-webapp`** → deploys public S3 bucket, uploads generated `index.html`
-5. **`validate.sh`** → creates, lists, gets, updates, and deletes 5 test notes
+2. **`01-lambdas`** → deploys all six Lambdas, API Gateway, IAM roles
+3. **`validate.sh`** → invokes each Lambda directly and prints the plain-text output
 
 ---
 
 ## Terraform Modules
 
 ### 01-lambdas
-- `aws_dynamodb_table` `notes` — PAY_PER_REQUEST, PK=owner, SK=id
-- Five `aws_lambda_function` resources (Python 3.14, 15s timeout), one per operation
-- Five `aws_iam_role` resources with scoped DynamoDB policies (least-privilege per operation)
-- `aws_apigatewayv2_api` `notes-api` — HTTP API with CORS configured
-- Five `aws_apigatewayv2_integration` + `aws_apigatewayv2_route` pairs wiring routes to Lambdas
+- Six `aws_lambda_function` resources (Python 3.14, 15s timeout), one per tool
+- Six `aws_iam_role` resources with scoped CE policies (least-privilege per tool):
+  - `ce:GetCostAndUsage` for mtd, by-service, compare, daily, top-drivers
+  - `ce:GetCostForecast` for forecast (separate action)
+- `aws_apigatewayv2_api` `costs-api` — HTTP API (no CORS, IAM auth only)
+- Six `aws_apigatewayv2_integration` + `aws_apigatewayv2_route` pairs
+- All routes: `authorization_type = "AWS_IAM"`
 - `aws_apigatewayv2_stage` `$default` with auto_deploy
-- Five `aws_lambda_permission` resources granting API Gateway invoke rights
-
-### 02-webapp
-- `aws_s3_bucket` with public-read static website hosting
-- `aws_s3_bucket_object` uploads `index.html` (generated from template)
+- Six `aws_lambda_permission` resources granting API Gateway invoke rights
 
 ---
 
 ## Lambda Code
 
-All five handlers follow the same pattern:
-- Read `NOTES_TABLE_NAME` from environment
-- Parse the API Gateway v2 payload format event
-- Interact with DynamoDB via `boto3.resource("dynamodb")`
-- Return `{"statusCode": N, "headers": {...}, "body": json.dumps(...)}`
+All six handlers live in `costs.py` and follow the same pattern:
+- Compute date windows using `datetime` and `calendar.monthrange`
+- Call `boto3.client("ce", region_name="us-east-1")` — CE endpoint is always us-east-1
+- Return `{"statusCode": 200, "headers": {"Content-Type": "text/plain"}, "body": "..."}`
+- Body is a human-readable plain-text summary, not raw CE JSON
+- Handle `DataUnavailableException` from `GetCostForecast` gracefully
 
-**DynamoDB data model:**
-- Table: `notes`
-- PK: `owner` (always `"global"` — hardcoded, no auth)
-- SK: `id` (UUID4)
-- Fields: `owner`, `id`, `title`, `note`, `created_at`, `updated_at`
+**CE date range convention:**
+- Start is inclusive, end is exclusive
+- MTD queries use end = tomorrow to capture today's partial data
+- Full-month queries use end = first day of next month
 
 ---
 
 ## Test Manually
 
 ```bash
-BASE=$(aws apigatewayv2 get-apis \
-  --query "Items[?Name=='notes-api'].ApiId" --output text | \
-  xargs -I{} aws apigatewayv2 get-api --api-id {} \
-  --query ApiEndpoint --output text)
+# Invoke any tool directly (no SigV4 needed for direct Lambda calls)
+aws lambda invoke \
+  --function-name cost-mtd \
+  --payload '{}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/out.json && jq -r '.body' /tmp/out.json
 
-# Create
-curl -X POST "$BASE/notes" -H "Content-Type: application/json" \
-  -d '{"title":"Hello","note":"World"}'
-
-# List
-curl "$BASE/notes"
-
-# Get / Update / Delete (replace ID)
-curl "$BASE/notes/{id}"
-curl -X PUT "$BASE/notes/{id}" -H "Content-Type: application/json" \
-  -d '{"title":"Updated","note":"Body"}'
-curl -X DELETE "$BASE/notes/{id}"
+# Via API Gateway (requires SigV4 signing — use awscurl or the MCP proxy)
+awscurl --service execute-api --region us-east-1 \
+  -X POST https://{api-id}.execute-api.us-east-1.amazonaws.com/cost/month-to-date
 ```

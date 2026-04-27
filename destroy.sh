@@ -3,8 +3,8 @@
 # File: destroy.sh
 #
 # Purpose:
-#   Tears down the Notes application stack deployed by apply.sh.
-#   Destroys the static web client first, then backend Lambdas/API.
+#   Tears down the Cost Explorer MCP API stack deployed by apply.sh.
+#   Destroys all Lambda functions, API Gateway, and IAM roles.
 # ================================================================================
 
 # ------------------------------------------------------------------------------
@@ -21,30 +21,13 @@ export AWS_DEFAULT_REGION="us-east-1"
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# Destroy static web application
-# ------------------------------------------------------------------------------
-
-# Removes the S3-hosted static web app and associated resources
-# provisioned by Terraform in the 02-webapp directory.
-echo "NOTE: Destroying Web Application..."
-
-cd 02-webapp || {
-  echo "ERROR: Directory 02-webapp not found."
-  exit 1
-}
-
-terraform init
-terraform destroy -auto-approve
-
-cd .. || exit
-
-# ------------------------------------------------------------------------------
 # Destroy Lambda functions and API Gateway
 # ------------------------------------------------------------------------------
 
-# Removes backend infrastructure including:
-#   - Lambda compute functions
+# Removes all infrastructure including:
+#   - Six cost-query Lambda functions
 #   - API Gateway (HTTP API) and routes/integrations
+#   - IAM roles and inline Cost Explorer policies
 # provisioned by Terraform in the 01-lambdas directory.
 echo "NOTE: Destroying Lambdas and API Gateway..."
 

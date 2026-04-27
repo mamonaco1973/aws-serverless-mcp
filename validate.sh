@@ -1,165 +1,128 @@
 #!/bin/bash
-# ===============================================================================
+# ================================================================================
 # File: validate.sh
-# ===============================================================================
-# Purpose:
-#   Validate the Notes API by exercising all CRUD endpoints:
-#     - POST   /notes        (create notes)
-#     - GET    /notes        (list notes)
-#     - GET    /notes/{id}   (get note)
-#     - PUT    /notes/{id}   (update note)
-#     - DELETE /notes/{id}   (delete note)
 #
-# Requirements:
-#   - aws CLI
-#   - curl
-#   - jq
+# Purpose:
+#   Smoke-tests all six Cost Explorer MCP Lambda functions by invoking them
+#   directly via the AWS CLI.
 #
 # Notes:
-#   - Assumes an HTTP API named "notes-api"
-#   - Owner is hardcoded to "global" in Lambda logic
-# ===============================================================================
+#   - API Gateway routes require AWS_IAM authorization (SigV4 signing).
+#     Direct Lambda invocation bypasses API Gateway auth and is used here
+#     so validation works without a separately configured MCP proxy.
+#   - All functions take no input — the payload is an empty JSON object.
+#   - A non-200 statusCode in the Lambda response is treated as a failure.
+# ================================================================================
 
-set -euo pipefail
+# ------------------------------------------------------------------------------
+# Global configuration
+# ------------------------------------------------------------------------------
+
 export AWS_DEFAULT_REGION="us-east-1"
 
+# Enable strict shell behavior.
+set -euo pipefail
+
+# Temporary file for Lambda response payloads.
+RESPONSE_FILE="/tmp/lambda_response.json"
+
 # ------------------------------------------------------------------------------
-# Step 1: Discover API Gateway endpoint
+# Helper: invoke and print
 # ------------------------------------------------------------------------------
-echo "NOTE: Locating API Gateway endpoint..."
+
+# Invokes a Lambda function, prints its plain-text body, and fails if the
+# returned statusCode is not 200.
+invoke_tool() {
+  local fn_name="$1"
+  local label="$2"
+
+  echo ""
+  echo "NOTE: Invoking ${label} (${fn_name})..."
+
+  aws lambda invoke \
+    --function-name "${fn_name}" \
+    --payload '{}' \
+    --cli-binary-format raw-in-base64-out \
+    "${RESPONSE_FILE}" > /dev/null
+
+  # Extract statusCode and body from the Lambda response envelope.
+  local status
+  status=$(jq -r '.statusCode' "${RESPONSE_FILE}")
+
+  local body
+  body=$(jq -r '.body' "${RESPONSE_FILE}")
+
+  if [[ "${status}" != "200" ]]; then
+    echo "ERROR: ${label} returned HTTP ${status}:"
+    echo "  ${body}"
+    exit 1
+  fi
+
+  echo "${body}"
+}
+
+# ------------------------------------------------------------------------------
+# Step 1: Month-to-date total
+# ------------------------------------------------------------------------------
+
+invoke_tool "cost-mtd" "get_month_to_date_cost"
+
+# ------------------------------------------------------------------------------
+# Step 2: Cost by service
+# ------------------------------------------------------------------------------
+
+invoke_tool "cost-by-service" "get_cost_by_service"
+
+# ------------------------------------------------------------------------------
+# Step 3: Month-over-month comparison
+# ------------------------------------------------------------------------------
+
+invoke_tool "cost-compare" "compare_this_month_to_last_month"
+
+# ------------------------------------------------------------------------------
+# Step 4: Daily cost trend
+# ------------------------------------------------------------------------------
+
+invoke_tool "cost-daily" "get_daily_cost_trend"
+
+# ------------------------------------------------------------------------------
+# Step 5: Top cost drivers
+# ------------------------------------------------------------------------------
+
+invoke_tool "cost-top-drivers" "find_top_cost_drivers"
+
+# ------------------------------------------------------------------------------
+# Step 6: Month-end forecast
+# ------------------------------------------------------------------------------
+
+invoke_tool "cost-forecast" "forecast_month_end_cost"
+
+# ------------------------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------------------------
 
 API_ID=$(aws apigatewayv2 get-apis \
-  --query "Items[?Name=='notes-api'].ApiId" \
+  --query "Items[?Name=='costs-api'].ApiId" \
   --output text)
 
-if [[ -z "${API_ID}" || "${API_ID}" == "None" ]]; then
-  echo "ERROR: No API found with name 'notes-api'"
-  exit 1
+API_BASE=""
+if [[ -n "${API_ID}" && "${API_ID}" != "None" ]]; then
+  API_BASE=$(aws apigatewayv2 get-api \
+    --api-id "${API_ID}" \
+    --query "ApiEndpoint" \
+    --output text)
 fi
-
-API_BASE=$(aws apigatewayv2 get-api \
-  --api-id "${API_ID}" \
-  --query "ApiEndpoint" \
-  --output text)
-
-echo "NOTE: API Gateway URL - ${API_BASE}"
-
-# ------------------------------------------------------------------------------
-# Step 2: Create 5 notes
-# ------------------------------------------------------------------------------
-echo "NOTE: Creating 5 test notes..."
-
-NOTE_IDS=()
-
-for i in {1..5}; do
-  PAYLOAD=$(jq -n \
-    --arg title "Test Note ${i}" \
-    --arg note "This is test note ${i}" \
-    '{ title: $title, note: $note }')
-
-  RESPONSE=$(curl -s -X POST "${API_BASE}/notes" \
-    -H "Content-Type: application/json" \
-    -d "${PAYLOAD}")
-
-  NOTE_ID=$(echo "${RESPONSE}" | jq -r '.id // empty')
-
-  if [[ -z "${NOTE_ID}" ]]; then
-    echo "ERROR: Failed to create note ${i}"
-    echo "RESPONSE: ${RESPONSE}"
-    exit 1
-  fi
-
-  NOTE_IDS+=("${NOTE_ID}")
-  echo "NOTE: Created note ${i} (id=${NOTE_ID})"
-done
-
-# ------------------------------------------------------------------------------
-# Step 3: List notes
-# ------------------------------------------------------------------------------
-echo "NOTE: Listing notes..."
-
-LIST_RESPONSE=$(curl -s "${API_BASE}/notes")
-NOTE_COUNT=$(echo "${LIST_RESPONSE}" | jq '.items | length')
-
-if [[ "${NOTE_COUNT}" -lt 5 ]]; then
-  echo "ERROR: Expected at least 5 notes, got ${NOTE_COUNT}"
-  exit 1
-fi
-
-echo "NOTE: List endpoint returned ${NOTE_COUNT} notes"
-
-# ------------------------------------------------------------------------------
-# Step 4: Get each note by ID
-# ------------------------------------------------------------------------------
-echo "NOTE: Fetching each created note..."
-
-for ID in "${NOTE_IDS[@]}"; do
-  GET_RESPONSE=$(curl -s "${API_BASE}/notes/${ID}")
-  TITLE=$(echo "${GET_RESPONSE}" | jq -r '.title // empty')
-
-  if [[ -z "${TITLE}" ]]; then
-    echo "ERROR: Failed to fetch note ${ID}"
-    exit 1
-  fi
-
-  echo "NOTE: Retrieved note ${ID} (${TITLE})"
-done
-
-# ------------------------------------------------------------------------------
-# Step 5: Update each note
-# ------------------------------------------------------------------------------
-echo "NOTE: Updating each note..."
-
-for ID in "${NOTE_IDS[@]}"; do
-  # Fetch existing note to preserve required fields
-  CURRENT=$(curl -s "${API_BASE}/notes/${ID}")
-
-  TITLE=$(echo "${CURRENT}" | jq -r '.title // empty')
-  NOTE=$(echo "${CURRENT}" | jq -r '.note // empty')
-
-  if [[ -z "${TITLE}" ]]; then
-    echo "ERROR: Failed to fetch existing note ${ID}"
-    exit 1
-  fi
-
-  UPDATE_PAYLOAD=$(jq -n \
-    --arg title "${TITLE}" \
-    --arg note  "Updated note for ${ID}" \
-    '{ title: $title, note: $note }')
-
-  UPDATE_RESPONSE=$(curl -s -X PUT "${API_BASE}/notes/${ID}" \
-    -H "Content-Type: application/json" \
-    -d "${UPDATE_PAYLOAD}")
-
-  UPDATED_TITLE=$(echo "${UPDATE_RESPONSE}" | jq -r '.title // empty')
-
-  if [[ -z "${UPDATED_TITLE}" ]]; then
-    echo "ERROR: Failed to update note ${ID}"
-    echo "RESPONSE: ${UPDATE_RESPONSE}"
-    exit 1
-  fi
-
-  echo "NOTE: Updated note ${ID}"
-done
-
-# ------------------------------------------------------------------------------
-# Step 6: Delete each note
-# ------------------------------------------------------------------------------
-echo "NOTE: Deleting each note..."
-
-for ID in "${NOTE_IDS[@]}"; do
-  curl -s -X DELETE "${API_BASE}/notes/${ID}" > /dev/null
-  echo "NOTE: Deleted note ${ID}"
-done
-
-WEBAPP_URL=$(aws s3api list-buckets \
-  --query "Buckets[?starts_with(Name, 'notes')].Name" \
-  --output text 2>/dev/null | head -1 | xargs -I{} echo "https://{}.s3.amazonaws.com/index.html" || echo "N/A")
 
 echo ""
-echo "================================================================================="
-echo "  Deployment validated!"
-echo "================================================================================="
-echo "  API : ${API_BASE}"
-echo "  Web : ${WEBAPP_URL}"
-echo "================================================================================="
+echo "========================================================================"
+echo "  Validation complete — all six MCP cost tools responded successfully."
+echo "========================================================================"
+if [[ -n "${API_BASE}" ]]; then
+  echo "  API endpoint: ${API_BASE}"
+  echo "  Auth: AWS_IAM (SigV4 required for all routes)"
+fi
+echo "========================================================================"
+
+# ================================================================================
+# End of script
+# ================================================================================

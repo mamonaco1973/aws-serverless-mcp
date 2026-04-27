@@ -1,10 +1,10 @@
+#!/bin/bash
 # ================================================================================
 # File: apply.sh
 #
 # Purpose:
-#   Orchestrates end-to-end deployment of the Notes application stack.
-#   This includes environment validation, Lambda/API infrastructure,
-#   and a static web client wired to the deployed API Gateway endpoint.
+#   Orchestrates end-to-end deployment of the Cost Explorer MCP API stack.
+#   This includes environment validation and Lambda/API Gateway infrastructure.
 # ================================================================================
 
 # ------------------------------------------------------------------------------
@@ -34,10 +34,11 @@ echo "NOTE: Running environment validation..."
 # ------------------------------------------------------------------------------
 
 # Deploys backend infrastructure including:
-#   - Lambda functions
-#   - API Gateway (HTTP API)
+#   - Six Lambda functions (one per MCP cost tool)
+#   - API Gateway (HTTP API with IAM authorization)
+#   - IAM roles scoped to Cost Explorer read permissions
 # using Terraform configuration in the 01-lambdas directory.
-echo "NOTE: Building Lambdas and API gateway..."
+echo "NOTE: Building Lambdas and API Gateway..."
 
 cd 01-lambdas || {
   echo "ERROR: 01-lambdas directory missing."
@@ -50,56 +51,11 @@ terraform apply -auto-approve
 cd .. || exit
 
 # ------------------------------------------------------------------------------
-# Build static web application
+# Post-deployment validation
 # ------------------------------------------------------------------------------
 
-# Retrieves the API Gateway endpoint and injects it into the
-# static HTML client using environment variable substitution.
-
-# Lookup API Gateway ID by name.
-API_ID=$(aws apigatewayv2 get-apis \
-  --query "Items[?Name=='notes-api'].ApiId" \
-  --output text)
-
-# Fail if the API does not exist.
-if [[ -z "${API_ID}" || "${API_ID}" == "None" ]]; then
-  echo "ERROR: No API found with name 'notes-api'"
-  exit 1
-fi
-
-# Retrieve the API Gateway endpoint URL.
-URL=$(aws apigatewayv2 get-api \
-  --api-id "${API_ID}" \
-  --query "ApiEndpoint" \
-  --output text)
-
-# Export API base URL for template substitution.
-export API_BASE="${URL}"
-echo "NOTE: API Gateway URL - ${API_BASE}"
-
-echo "NOTE: Building Simple Web Application..."
-
-cd 02-webapp || {
-  echo "ERROR: 02-webapp directory missing."
-  exit 1
-}
-
-# Substitute API endpoint into HTML template.
-envsubst '${API_BASE}' < index.html.tmpl > index.html || {
-  echo "ERROR: Failed to generate index.html file. Exiting."
-  exit 1
-}
-
-terraform init
-terraform apply -auto-approve
-
-cd .. || exit
-
-# ------------------------------------------------------------------------------
-# Post-deployment validation (optional)
-# ------------------------------------------------------------------------------
-
-# Executes runtime validation checks once implemented.
+# Invokes each Lambda function directly to verify Cost Explorer connectivity
+# and confirm plain-text summaries are returned correctly.
 echo "NOTE: Running build validation..."
 ./validate.sh
 

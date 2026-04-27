@@ -51,6 +51,35 @@ terraform apply -auto-approve
 cd .. || exit
 
 # ------------------------------------------------------------------------------
+# Generate Claude Desktop MCP config
+# ------------------------------------------------------------------------------
+
+# Pulls the proxy credentials from Secrets Manager and substitutes them into
+# the config template. The output file is gitignored — never committed.
+echo "NOTE: Generating Claude Desktop config..."
+
+SECRET=$(aws secretsmanager get-secret-value \
+  --secret-id cost-mcp-proxy \
+  --query SecretString \
+  --output text)
+
+export MCP_ACCESS_KEY_ID=$(echo "${SECRET}"     | jq -r '.access_key_id')
+export MCP_SECRET_ACCESS_KEY=$(echo "${SECRET}" | jq -r '.secret_access_key')
+export MCP_API_ENDPOINT=$(echo "${SECRET}"      | jq -r '.api_endpoint')
+
+SUBST='${MCP_ACCESS_KEY_ID} ${MCP_SECRET_ACCESS_KEY} ${MCP_API_ENDPOINT}'
+
+envsubst "$SUBST" \
+  < 02-proxy/claude_desktop_config_ps1.json.tmpl \
+  > 02-proxy/claude_desktop_config_ps1.json
+
+envsubst "$SUBST" \
+  < 02-proxy/claude_desktop_config_sh.json.tmpl \
+  > 02-proxy/claude_desktop_config_sh.json
+
+echo "NOTE: Configs written to 02-proxy/claude_desktop_config_ps1.json and claude_desktop_config_sh.json"
+
+# ------------------------------------------------------------------------------
 # Post-deployment validation
 # ------------------------------------------------------------------------------
 

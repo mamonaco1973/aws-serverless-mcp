@@ -151,6 +151,54 @@ def _sum_cost(response: dict) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Tool registry
+# ---------------------------------------------------------------------------
+# Single source of truth for MCP tool metadata. Each entry includes the
+# standard MCP fields (name, description, inputSchema) plus a route field
+# that maps the tool to its API Gateway path. Returned by tools_handler so
+# the proxy can self-configure at startup without hardcoded tool lists.
+
+TOOL_REGISTRY = [
+    {
+        "name": "get_month_to_date_cost",
+        "description": "Returns total AWS spend from the first of this month through today.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "route": "/cost/month-to-date",
+    },
+    {
+        "name": "get_cost_by_service",
+        "description": "Returns month-to-date AWS spend broken down by service, sorted descending.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "route": "/cost/by-service",
+    },
+    {
+        "name": "compare_this_month_to_last_month",
+        "description": "Compares this month MTD spend against last month full total.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "route": "/cost/compare-months",
+    },
+    {
+        "name": "get_daily_cost_trend",
+        "description": "Returns day-by-day AWS spend for the current month with running totals.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "route": "/cost/daily-trend",
+    },
+    {
+        "name": "find_top_cost_drivers",
+        "description": "Returns the top 10 AWS services by spend this month with percentage share.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "route": "/cost/top-drivers",
+    },
+    {
+        "name": "forecast_month_end_cost",
+        "description": "Forecasts remaining AWS spend through end of month with an 80% confidence range.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "route": "/cost/forecast",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # MCP tool handlers
 # ---------------------------------------------------------------------------
 
@@ -429,3 +477,24 @@ def forecast_handler(event, context):
         f"  80% confidence range:      ${low:,.2f} – ${high:,.2f}",
     ]
     return _response(200, "\n".join(lines))
+
+
+def tools_handler(event, context):
+    """Return the MCP tool registry for proxy self-configuration.
+
+    Each entry includes the standard MCP tool fields (name, description,
+    inputSchema) plus a route field the proxy uses to map tool calls to
+    API Gateway paths. The proxy strips route before forwarding to the AI.
+
+    Args:
+        event (dict): API Gateway v2 HTTP event (no fields consumed).
+        context (obj): Lambda context object (unused).
+
+    Returns:
+        dict: 200 with a JSON array of tool descriptors.
+    """
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(TOOL_REGISTRY),
+    }

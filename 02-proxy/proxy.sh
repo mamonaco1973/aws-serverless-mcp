@@ -8,6 +8,10 @@
 #   and writes tool results back to stdout. The AI caller sees a local MCP
 #   server — the Lambda backend is fully transparent.
 #
+#   On startup the proxy calls GET /tools (SigV4 signed) to load the tool
+#   registry from the backend. Route mappings and tool schemas require no
+#   hardcoding in this file — add a tool in costs.py and redeploy.
+#
 # Dependencies:
 #   bash 4+, curl, jq, openssl
 #
@@ -31,26 +35,11 @@ REGION="${MCP_REGION:-us-east-1}"
 MCP_USER="${USER:-$(whoami)}"
 
 # ================================================================================
-# Tool registry
+# Tool registry — populated at startup from GET /tools
 # ================================================================================
 
 declare -A TOOL_ROUTES
-TOOL_ROUTES["get_month_to_date_cost"]="/cost/month-to-date"
-TOOL_ROUTES["get_cost_by_service"]="/cost/by-service"
-TOOL_ROUTES["compare_this_month_to_last_month"]="/cost/compare-months"
-TOOL_ROUTES["get_daily_cost_trend"]="/cost/daily-trend"
-TOOL_ROUTES["find_top_cost_drivers"]="/cost/top-drivers"
-TOOL_ROUTES["forecast_month_end_cost"]="/cost/forecast"
-
-# Static tool schema list — all tools take no parameters.
-TOOLS_JSON='[
-  {"name":"get_month_to_date_cost","description":"Returns total AWS spend from the first of this month through today.","inputSchema":{"type":"object","properties":{}}},
-  {"name":"get_cost_by_service","description":"Returns month-to-date AWS spend broken down by service, sorted descending.","inputSchema":{"type":"object","properties":{}}},
-  {"name":"compare_this_month_to_last_month","description":"Compares this month MTD spend against last month full total.","inputSchema":{"type":"object","properties":{}}},
-  {"name":"get_daily_cost_trend","description":"Returns day-by-day AWS spend for the current month with running totals.","inputSchema":{"type":"object","properties":{}}},
-  {"name":"find_top_cost_drivers","description":"Returns the top 10 AWS services by spend this month with percentage share.","inputSchema":{"type":"object","properties":{}}},
-  {"name":"forecast_month_end_cost","description":"Forecasts remaining AWS spend through end of month with an 80% confidence range.","inputSchema":{"type":"object","properties":{}}}
-]'
+TOOLS_JSON='[]'
 
 # ================================================================================
 # SigV4 signing helpers
@@ -73,8 +62,9 @@ hmac_sha256_hex() {
 }
 
 invoke_signed_request() {
-    local url="$1"
-    local body="${2:-{}}"
+    local method="$1"
+    local url="$2"
+    local body="${3:-}"
     local service="execute-api"
 
     local now date_stamp host uri_path
@@ -83,19 +73,30 @@ invoke_signed_request() {
     host=$(echo "$url" | sed 's|https://||' | cut -d'/' -f1)
     uri_path=$(echo "$url" | sed "s|https://${host}||")
 
-    # Payload hash — SHA-256 of the request body.
-    local payload_hash
-    payload_hash=$(sha256_hex "$body")
+    local payload_hash canonical_headers signed_headers canonical_request
 
-    # Canonical request — headers must be sorted alphabetically.
-    local canonical_headers signed_headers canonical_request
-    canonical_headers="content-type:application/json
+    if [[ "$method" == "GET" ]]; then
+        # GET carries no body — payload hash is SHA-256 of empty string.
+        payload_hash=$(sha256_hex "")
+        canonical_headers="host:${host}
+x-amz-date:${now}
+x-mcp-user:${MCP_USER}
+"
+        signed_headers="host;x-amz-date;x-mcp-user"
+    else
+        # POST: hash the provided body, include Content-Type in signed headers.
+        local effective_body="${body:-{\}}"
+        payload_hash=$(sha256_hex "$effective_body")
+        canonical_headers="content-type:application/json
 host:${host}
 x-amz-date:${now}
 x-mcp-user:${MCP_USER}
 "
-    signed_headers="content-type;host;x-amz-date;x-mcp-user"
-    canonical_request="POST
+        signed_headers="content-type;host;x-amz-date;x-mcp-user"
+        body="$effective_body"
+    fi
+
+    canonical_request="${method}
 ${uri_path}
 
 ${canonical_headers}
@@ -122,13 +123,56 @@ ${cr_hash}"
     local auth_header="AWS4-HMAC-SHA256 Credential=${ACCESS_KEY}/${credential_scope}, SignedHeaders=${signed_headers}, Signature=${signature}"
 
     # Redirect curl stdin from /dev/null so it does not consume MCP messages.
-    curl -s -X POST "$url" \
-        -H "Authorization: ${auth_header}" \
-        -H "x-amz-date: ${now}" \
-        -H "Content-Type: application/json" \
-        -H "x-mcp-user: ${MCP_USER}" \
-        -d "$body" \
-        < /dev/null
+    if [[ "$method" == "GET" ]]; then
+        curl -s -X GET "$url" \
+            -H "Authorization: ${auth_header}" \
+            -H "x-amz-date: ${now}" \
+            -H "x-mcp-user: ${MCP_USER}" \
+            < /dev/null
+    else
+        curl -s -X POST "$url" \
+            -H "Authorization: ${auth_header}" \
+            -H "x-amz-date: ${now}" \
+            -H "Content-Type: application/json" \
+            -H "x-mcp-user: ${MCP_USER}" \
+            -d "$body" \
+            < /dev/null
+    fi
+}
+
+# ================================================================================
+# Tool discovery
+# ================================================================================
+
+load_tool_registry() {
+    local url="${API_ENDPOINT%/}/tools"
+    echo "NOTE: Discovering tools from ${url} ..." >&2
+
+    local registry
+    if ! registry=$(invoke_signed_request "GET" "$url"); then
+        echo "ERROR: Tool discovery request failed." >&2
+        exit 1
+    fi
+
+    if [[ -z "$registry" ]] || ! echo "$registry" | jq -e . > /dev/null 2>&1; then
+        echo "ERROR: Tool discovery returned invalid JSON." >&2
+        exit 1
+    fi
+
+    # Populate route map from the registry.
+    while IFS= read -r entry; do
+        local name route
+        name=$(echo "$entry"  | jq -r '.name')
+        route=$(echo "$entry" | jq -r '.route')
+        TOOL_ROUTES["$name"]="$route"
+    done < <(echo "$registry" | jq -c '.[]')
+
+    # Build the tools/list payload — strip route before forwarding to the AI.
+    TOOLS_JSON=$(echo "$registry" | jq -c '[.[] | {name, description, inputSchema}]')
+
+    local count
+    count=$(echo "$registry" | jq length)
+    echo "NOTE: Discovered ${count} tool(s)." >&2
 }
 
 # ================================================================================
@@ -189,7 +233,7 @@ handle_tools_call() {
     local url="${API_ENDPOINT%/}${route}"
     local text
 
-    if ! text=$(invoke_signed_request "$url" "{}"); then
+    if ! text=$(invoke_signed_request "POST" "$url" "{}"); then
         send_error "$id" -32603 "Tool invocation failed: curl error"
         return
     fi
@@ -200,11 +244,13 @@ handle_tools_call() {
 }
 
 # ================================================================================
-# Main loop
+# Main
 # ================================================================================
 
 echo "NOTE: Cost Explorer MCP proxy started." >&2
 echo "NOTE: Endpoint: ${API_ENDPOINT}  Region: ${REGION}" >&2
+
+load_tool_registry
 
 while IFS= read -r line; do
     # Strip carriage returns from Windows line endings.

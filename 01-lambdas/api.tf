@@ -3,6 +3,7 @@
 # ================================================================================
 # Purpose:
 #   Provides Cost Explorer query endpoints for the MCP serverless API:
+#     - GET  /tools                → Tool registry for proxy self-configuration
 #     - POST /cost/month-to-date   → Month-to-date total spend
 #     - POST /cost/by-service      → Spend broken down by AWS service
 #     - POST /cost/compare-months  → This month vs last month
@@ -34,6 +35,14 @@ resource "aws_apigatewayv2_api" "costs_api" {
 # --------------------------------------------------------------------------------
 # RESOURCE: aws_apigatewayv2_integration — one per Lambda
 # --------------------------------------------------------------------------------
+
+resource "aws_apigatewayv2_integration" "tools_integration" {
+  api_id                 = aws_apigatewayv2_api.costs_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.lambda_tools.invoke_arn
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+}
 
 resource "aws_apigatewayv2_integration" "mtd_integration" {
   api_id                 = aws_apigatewayv2_api.costs_api.id
@@ -90,6 +99,13 @@ resource "aws_apigatewayv2_integration" "forecast_integration" {
 # request with SigV4. Unsigned calls are rejected by API Gateway before
 # reaching the Lambda function.
 # --------------------------------------------------------------------------------
+
+resource "aws_apigatewayv2_route" "tools_route" {
+  api_id             = aws_apigatewayv2_api.costs_api.id
+  route_key          = "GET /tools"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.tools_integration.id}"
+}
 
 resource "aws_apigatewayv2_route" "mtd_route" {
   api_id             = aws_apigatewayv2_api.costs_api.id
@@ -150,6 +166,14 @@ resource "aws_apigatewayv2_stage" "costs_stage" {
 # --------------------------------------------------------------------------------
 # Grants API Gateway permission to invoke each Lambda function.
 # --------------------------------------------------------------------------------
+
+resource "aws_lambda_permission" "allow_tools_invoke" {
+  statement_id  = "AllowAPIGatewayInvokeTools"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.lambda_tools.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.costs_api.execution_arn}/*/*"
+}
 
 resource "aws_lambda_permission" "allow_mtd_invoke" {
   statement_id  = "AllowAPIGatewayInvokeMtd"

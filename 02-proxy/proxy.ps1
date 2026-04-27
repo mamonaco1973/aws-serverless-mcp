@@ -7,6 +7,10 @@
 #   and writes tool results back to stdout. The AI caller sees a local MCP
 #   server — the Lambda backend is fully transparent.
 #
+#   On startup the proxy calls GET /tools (SigV4 signed) to load the tool
+#   registry from the backend. Route mappings and tool schemas require no
+#   hardcoding in this file — add a tool in costs.py and redeploy.
+#
 # Required environment variables:
 #   MCP_ACCESS_KEY_ID      IAM access key for the cost-mcp-proxy user
 #   MCP_SECRET_ACCESS_KEY  IAM secret key for the cost-mcp-proxy user
@@ -54,53 +58,14 @@ foreach ($name in @("MCP_ACCESS_KEY_ID", "MCP_SECRET_ACCESS_KEY", "MCP_API_ENDPO
 }
 
 # ================================================================================
-# Tool registry
+# Tool registry — populated at startup from GET /tools
 # ================================================================================
 
 # Maps MCP tool names to their API Gateway route paths.
-$TOOL_ROUTES = @{
-    "get_month_to_date_cost"           = "/cost/month-to-date"
-    "get_cost_by_service"              = "/cost/by-service"
-    "compare_this_month_to_last_month" = "/cost/compare-months"
-    "get_daily_cost_trend"             = "/cost/daily-trend"
-    "find_top_cost_drivers"            = "/cost/top-drivers"
-    "forecast_month_end_cost"          = "/cost/forecast"
-}
+$script:TOOL_ROUTES = @{}
 
-# Tool schemas exposed to the MCP client during initialize / tools/list.
-# All tools take no input — inputSchema is an empty object.
-$TOOLS = @(
-    @{
-        name        = "get_month_to_date_cost"
-        description = "Returns total AWS spend from the first of this month through today."
-        inputSchema = @{ type = "object"; properties = [ordered]@{} }
-    }
-    @{
-        name        = "get_cost_by_service"
-        description = "Returns month-to-date AWS spend broken down by service, sorted descending."
-        inputSchema = @{ type = "object"; properties = [ordered]@{} }
-    }
-    @{
-        name        = "compare_this_month_to_last_month"
-        description = "Compares this month's MTD spend against last month's full total."
-        inputSchema = @{ type = "object"; properties = [ordered]@{} }
-    }
-    @{
-        name        = "get_daily_cost_trend"
-        description = "Returns day-by-day AWS spend for the current month with running totals."
-        inputSchema = @{ type = "object"; properties = [ordered]@{} }
-    }
-    @{
-        name        = "find_top_cost_drivers"
-        description = "Returns the top 10 AWS services by spend this month with percentage share."
-        inputSchema = @{ type = "object"; properties = [ordered]@{} }
-    }
-    @{
-        name        = "forecast_month_end_cost"
-        description = "Forecasts remaining AWS spend through end of month with an 80% confidence range."
-        inputSchema = @{ type = "object"; properties = [ordered]@{} }
-    }
-)
+# Tool schemas forwarded to the MCP client on tools/list.
+$script:TOOLS = @()
 
 # ================================================================================
 # SigV4 signing
@@ -119,18 +84,19 @@ function Invoke-SignedRequest {
         Signs and executes an HTTP request using AWS Signature Version 4.
 
     .PARAMETER Method
-        HTTP method (POST).
+        HTTP method. GET omits Content-Type from signed headers and sends
+        no body. POST includes Content-Type and defaults body to "{}".
 
     .PARAMETER Url
         Full URL of the API Gateway endpoint.
 
     .PARAMETER Body
-        Request body string. Defaults to an empty JSON object.
+        Request body string. Ignored for GET requests.
     #>
     param(
-        [string]$Method,
+        [string]$Method = "POST",
         [string]$Url,
-        [string]$Body = "{}"
+        [string]$Body = ""
     )
 
     $uri       = [System.Uri]$Url
@@ -138,16 +104,26 @@ function Invoke-SignedRequest {
     $amzDate   = $now.ToString("yyyyMMddTHHmmssZ")
     $dateStamp = $now.ToString("yyyyMMdd")
     $service   = "execute-api"
+    $sha256    = [System.Security.Cryptography.SHA256]::Create()
 
-    # Hash the request body — required for the canonical request.
-    $sha256      = [System.Security.Cryptography.SHA256]::Create()
+    # GET carries no body; POST defaults to an empty JSON object.
+    $effectiveBody = if ($Method -eq "GET") { "" } else {
+        if ([string]::IsNullOrEmpty($Body)) { "{}" } else { $Body }
+    }
+
     $payloadHash = [BitConverter]::ToString(
-        $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Body))
+        $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($effectiveBody))
     ).Replace("-", "").ToLower()
 
-    # Canonical request — order of signed headers must be sorted alphabetically.
-    $canonicalHeaders = "content-type:application/json`nhost:$($uri.Host)`nx-amz-date:$amzDate`nx-mcp-user:$($script:MCP_USER)`n"
-    $signedHeaders    = "content-type;host;x-amz-date;x-mcp-user"
+    # GET omits Content-Type — signed headers differ by method.
+    if ($Method -eq "GET") {
+        $canonicalHeaders = "host:$($uri.Host)`nx-amz-date:$amzDate`nx-mcp-user:$($script:MCP_USER)`n"
+        $signedHeaders    = "host;x-amz-date;x-mcp-user"
+    } else {
+        $canonicalHeaders = "content-type:application/json`nhost:$($uri.Host)`nx-amz-date:$amzDate`nx-mcp-user:$($script:MCP_USER)`n"
+        $signedHeaders    = "content-type;host;x-amz-date;x-mcp-user"
+    }
+
     $canonicalRequest = "$Method`n$($uri.AbsolutePath)`n`n$canonicalHeaders`n$signedHeaders`n$payloadHash"
 
     # String to sign — binds the request to a specific date, region, and service.
@@ -169,15 +145,54 @@ function Invoke-SignedRequest {
     $headers = @{
         "Authorization" = "AWS4-HMAC-SHA256 Credential=$ACCESS_KEY/$credentialScope, SignedHeaders=$signedHeaders, Signature=$signature"
         "x-amz-date"    = $amzDate
-        "Content-Type"  = "application/json"
         "x-mcp-user"    = $script:MCP_USER
+    }
+    if ($Method -eq "POST") {
+        $headers["Content-Type"] = "application/json"
     }
 
     # Use Invoke-WebRequest for predictable .Content string return regardless
     # of Content-Type — Lambda returns text/plain which Invoke-RestMethod
     # handles inconsistently across PS versions.
-    $response = Invoke-WebRequest -Method $Method -Uri $Url -Headers $headers -Body $Body -UseBasicParsing
+    if ($Method -eq "GET") {
+        $response = Invoke-WebRequest -Method GET -Uri $Url -Headers $headers -UseBasicParsing
+    } else {
+        $response = Invoke-WebRequest -Method POST -Uri $Url -Headers $headers -Body $effectiveBody -UseBasicParsing
+    }
     return $response.Content
+}
+
+# ================================================================================
+# Tool discovery
+# ================================================================================
+
+function Initialize-ToolRegistry {
+    <#
+    .SYNOPSIS
+        Calls GET /tools to load the route map and MCP schemas from the backend.
+    #>
+    $url = "$($API_ENDPOINT.TrimEnd('/'))/tools"
+    [Console]::Error.WriteLine("NOTE: Discovering tools from $url ...")
+
+    try {
+        $json     = Invoke-SignedRequest -Method "GET" -Url $url
+        $registry = $json | ConvertFrom-Json
+    }
+    catch {
+        [Console]::Error.WriteLine("ERROR: Tool discovery failed: $_")
+        exit 1
+    }
+
+    foreach ($entry in $registry) {
+        $script:TOOL_ROUTES[$entry.name] = $entry.route
+        $script:TOOLS += [ordered]@{
+            name        = $entry.name
+            description = $entry.description
+            inputSchema = $entry.inputSchema
+        }
+    }
+
+    [Console]::Error.WriteLine("NOTE: Discovered $($script:TOOLS.Count) tool(s).")
 }
 
 # ================================================================================
@@ -218,7 +233,7 @@ function Invoke-Initialize {
 
 function Invoke-ToolsList {
     param($Id)
-    Send-Response -Id $Id -Result @{ tools = $TOOLS }
+    Send-Response -Id $Id -Result @{ tools = $script:TOOLS }
 }
 
 function Invoke-ToolsCall {
@@ -230,7 +245,7 @@ function Invoke-ToolsCall {
         return
     }
 
-    $route = $TOOL_ROUTES[$toolName]
+    $route = $script:TOOL_ROUTES[$toolName]
     if (-not $route) {
         Send-Error -Id $Id -Code -32602 -Message "Unknown tool: $toolName"
         return
@@ -250,11 +265,13 @@ function Invoke-ToolsCall {
 }
 
 # ================================================================================
-# Main loop
+# Main
 # ================================================================================
 
 [Console]::Error.WriteLine("NOTE: Cost Explorer MCP proxy started.")
 [Console]::Error.WriteLine("NOTE: Endpoint: $API_ENDPOINT  Region: $REGION")
+
+Initialize-ToolRegistry
 
 while ($true) {
     $line = [Console]::In.ReadLine()

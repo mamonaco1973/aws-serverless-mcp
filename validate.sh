@@ -62,37 +62,63 @@ invoke_tool() {
 }
 
 # ------------------------------------------------------------------------------
-# Step 1: Month-to-date total
+# Step 1: Tool discovery registry
+# ------------------------------------------------------------------------------
+
+echo ""
+echo "NOTE: Invoking tool registry (cost-tools)..."
+
+aws lambda invoke \
+  --function-name "cost-tools" \
+  --payload '{}' \
+  --cli-binary-format raw-in-base64-out \
+  "${RESPONSE_FILE}" > /dev/null
+
+TOOLS_STATUS=$(jq -r '.statusCode' "${RESPONSE_FILE}")
+TOOLS_BODY=$(jq -r '.body' "${RESPONSE_FILE}")
+
+if [[ "${TOOLS_STATUS}" != "200" ]]; then
+  echo "ERROR: cost-tools returned HTTP ${TOOLS_STATUS}:"
+  echo "  ${TOOLS_BODY}"
+  exit 1
+fi
+
+TOOL_COUNT=$(echo "${TOOLS_BODY}" | jq 'length')
+echo "Registry contains ${TOOL_COUNT} tool(s):"
+echo "${TOOLS_BODY}" | jq -r '.[] | "  \(.name) → \(.route)"'
+
+# ------------------------------------------------------------------------------
+# Step 2: Month-to-date total
 # ------------------------------------------------------------------------------
 
 invoke_tool "cost-mtd" "get_month_to_date_cost"
 
 # ------------------------------------------------------------------------------
-# Step 2: Cost by service
+# Step 3: Cost by service
 # ------------------------------------------------------------------------------
 
 invoke_tool "cost-by-service" "get_cost_by_service"
 
 # ------------------------------------------------------------------------------
-# Step 3: Month-over-month comparison
+# Step 4: Month-over-month comparison
 # ------------------------------------------------------------------------------
 
 invoke_tool "cost-compare" "compare_this_month_to_last_month"
 
 # ------------------------------------------------------------------------------
-# Step 4: Daily cost trend
+# Step 5: Daily cost trend
 # ------------------------------------------------------------------------------
 
 invoke_tool "cost-daily" "get_daily_cost_trend"
 
 # ------------------------------------------------------------------------------
-# Step 5: Top cost drivers
+# Step 6: Top cost drivers
 # ------------------------------------------------------------------------------
 
 invoke_tool "cost-top-drivers" "find_top_cost_drivers"
 
 # ------------------------------------------------------------------------------
-# Step 6: Month-end forecast
+# Step 7: Month-end forecast
 # ------------------------------------------------------------------------------
 
 invoke_tool "cost-forecast" "forecast_month_end_cost"
@@ -115,7 +141,7 @@ fi
 
 echo ""
 echo "========================================================================"
-echo "  Validation complete — all six MCP cost tools responded successfully."
+echo "  Validation complete — tool discovery + all six MCP cost tools OK."
 echo "========================================================================"
 if [[ -n "${API_BASE}" ]]; then
   echo "  API endpoint: ${API_BASE}"

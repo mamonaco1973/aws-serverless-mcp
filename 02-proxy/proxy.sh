@@ -28,6 +28,7 @@ ACCESS_KEY="${MCP_ACCESS_KEY_ID:?MCP_ACCESS_KEY_ID is required}"
 SECRET_KEY="${MCP_SECRET_ACCESS_KEY:?MCP_SECRET_ACCESS_KEY is required}"
 API_ENDPOINT="${MCP_API_ENDPOINT:?MCP_API_ENDPOINT is required}"
 REGION="${MCP_REGION:-us-east-1}"
+MCP_USER="${USER:-$(whoami)}"
 
 # ================================================================================
 # Tool registry
@@ -91,8 +92,9 @@ invoke_signed_request() {
     canonical_headers="content-type:application/json
 host:${host}
 x-amz-date:${now}
+x-mcp-user:${MCP_USER}
 "
-    signed_headers="content-type;host;x-amz-date"
+    signed_headers="content-type;host;x-amz-date;x-mcp-user"
     canonical_request="POST
 ${uri_path}
 
@@ -124,6 +126,7 @@ ${cr_hash}"
         -H "Authorization: ${auth_header}" \
         -H "x-amz-date: ${now}" \
         -H "Content-Type: application/json" \
+        -H "x-mcp-user: ${MCP_USER}" \
         -d "$body" \
         < /dev/null
 }

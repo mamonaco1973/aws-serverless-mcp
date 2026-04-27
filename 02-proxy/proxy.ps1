@@ -44,6 +44,7 @@ $ACCESS_KEY   = $env:MCP_ACCESS_KEY_ID
 $SECRET_KEY   = $env:MCP_SECRET_ACCESS_KEY
 $API_ENDPOINT = $env:MCP_API_ENDPOINT
 $REGION       = if ($env:MCP_REGION) { $env:MCP_REGION } else { "us-east-1" }
+$script:MCP_USER = $env:USERNAME
 
 foreach ($name in @("MCP_ACCESS_KEY_ID", "MCP_SECRET_ACCESS_KEY", "MCP_API_ENDPOINT")) {
     if ([string]::IsNullOrEmpty((Get-Item "env:$name" -ErrorAction SilentlyContinue).Value)) {
@@ -145,8 +146,8 @@ function Invoke-SignedRequest {
     ).Replace("-", "").ToLower()
 
     # Canonical request — order of signed headers must be sorted alphabetically.
-    $canonicalHeaders = "content-type:application/json`nhost:$($uri.Host)`nx-amz-date:$amzDate`n"
-    $signedHeaders    = "content-type;host;x-amz-date"
+    $canonicalHeaders = "content-type:application/json`nhost:$($uri.Host)`nx-amz-date:$amzDate`nx-mcp-user:$($script:MCP_USER)`n"
+    $signedHeaders    = "content-type;host;x-amz-date;x-mcp-user"
     $canonicalRequest = "$Method`n$($uri.AbsolutePath)`n`n$canonicalHeaders`n$signedHeaders`n$payloadHash"
 
     # String to sign — binds the request to a specific date, region, and service.
@@ -169,6 +170,7 @@ function Invoke-SignedRequest {
         "Authorization" = "AWS4-HMAC-SHA256 Credential=$ACCESS_KEY/$credentialScope, SignedHeaders=$signedHeaders, Signature=$signature"
         "x-amz-date"    = $amzDate
         "Content-Type"  = "application/json"
+        "x-mcp-user"    = $script:MCP_USER
     }
 
     # Use Invoke-WebRequest for predictable .Content string return regardless

@@ -79,6 +79,6 @@ resource "aws_secretsmanager_secret_version" "mcp_proxy_credentials" {
     access_key_id     = aws_iam_access_key.mcp_proxy_key.id
     secret_access_key = aws_iam_access_key.mcp_proxy_key.secret
     api_endpoint      = aws_apigatewayv2_stage.costs_stage.invoke_url
-    region            = data.aws_region.current.name
+    region            = data.aws_region.current.id
   })
 }

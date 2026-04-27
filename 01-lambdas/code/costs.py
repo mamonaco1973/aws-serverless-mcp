@@ -51,6 +51,21 @@ ce = boto3.client("ce", region_name="us-east-1")
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _audit_log(event: dict, tool: str) -> None:
+    """Log the tool invocation with the calling user for audit purposes.
+
+    The x-mcp-user header is set by the proxy from the OS username and signed
+    into the SigV4 request — it cannot be omitted without breaking the signature.
+    It is audit-quality (self-reported by the proxy host) not proof-of-identity.
+
+    Args:
+        event (dict): API Gateway v2 HTTP event.
+        tool (str): Name of the MCP tool being invoked.
+    """
+    user = (event.get("headers") or {}).get("x-mcp-user", "unknown")
+    print(f"AUDIT tool={tool} user={user}")
+
+
 def _response(status_code: int, text: str) -> dict:
     """Build an API Gateway v2 HTTP response with a plain-text body.
 
@@ -150,6 +165,7 @@ def mtd_handler(event, context):
         dict: 200 with a plain-text MTD cost summary.
               500 on Cost Explorer API failure.
     """
+    _audit_log(event, "get_month_to_date_cost")
     start, end = _mtd_window()
 
     try:
@@ -181,6 +197,7 @@ def by_service_handler(event, context):
         dict: 200 with a per-service cost breakdown.
               500 on Cost Explorer API failure.
     """
+    _audit_log(event, "get_cost_by_service")
     start, end = _mtd_window()
 
     try:
@@ -223,6 +240,7 @@ def compare_handler(event, context):
         dict: 200 with a month-over-month comparison summary.
               500 on Cost Explorer API failure.
     """
+    _audit_log(event, "compare_this_month_to_last_month")
     this_start, this_end = _mtd_window()
     prev_year, prev_month = _prev_month()
     last_start, last_end = _full_month_window(prev_year, prev_month)
@@ -270,6 +288,7 @@ def daily_handler(event, context):
         dict: 200 with one line per day showing spend.
               500 on Cost Explorer API failure.
     """
+    _audit_log(event, "get_daily_cost_trend")
     start, end = _mtd_window()
 
     try:
@@ -309,6 +328,7 @@ def top_drivers_handler(event, context):
         dict: 200 with a ranked list of services by spend and share.
               500 on Cost Explorer API failure.
     """
+    _audit_log(event, "find_top_cost_drivers")
     start, end = _mtd_window()
 
     try:
@@ -359,6 +379,7 @@ def forecast_handler(event, context):
               200 with an explanatory message if no forecast is needed.
               500 on Cost Explorer API failure or insufficient history.
     """
+    _audit_log(event, "forecast_month_end_cost")
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 

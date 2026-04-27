@@ -24,12 +24,17 @@ Key capabilities demonstrated:
    standard MCP tool server, invokable by any MCP-compatible AI client.
 2. **IAM-Secured API** – All API Gateway routes require AWS Signature Version 4.
    Unsigned requests are rejected before reaching Lambda.
-3. **Thin Local Proxy** – A PowerShell or Bash script reads MCP JSON-RPC from
-   stdin, signs requests, and writes results to stdout — no Python runtime required.
-4. **Least-Privilege IAM** – Each Lambda function carries only the Cost Explorer
+3. **Self-Configuring Proxy** – At startup the proxy calls `GET /tools` (SigV4
+   signed) to load route mappings and tool schemas from the backend. No tool
+   definitions are hardcoded in the proxy — add a tool in `costs.py`, redeploy,
+   and the proxy picks it up automatically on next start.
+4. **Generic Proxy Pattern** – Because the proxy contains no tool-specific logic,
+   the same script can front any serverless backend that exposes `GET /tools` in
+   this format. Point it at a different `MCP_API_ENDPOINT` to get a different tool set.
+5. **Least-Privilege IAM** – Each Lambda function carries only the Cost Explorer
    permission it needs. A dedicated proxy IAM user holds only `execute-api:Invoke`.
-5. **Infrastructure as Code** – Terraform provisions all Lambda functions, API
-   Gateway routes, IAM roles, and Secrets Manager credentials in a single apply.
+6. **Infrastructure as Code** – Terraform provisions all Lambda functions, API
+   Gateway routes, and IAM roles in a single apply.
 
 Together, these components form a **reference architecture for serverless MCP
 tool backends on AWS** — demonstrating how AI tools can be centrally deployed,
@@ -87,12 +92,15 @@ When the deployment completes, the following resources are created:
   - All API Gateway routes enforce `AWS_IAM` authorization — no unsigned access possible
 
 - **AWS Lambda Functions:**
-  - Six Python 3.14 Lambda functions, one per MCP tool, all sharing `costs.py`
-  - Each function calls the AWS Cost Explorer API and returns a plain-text summary
+  - Seven Python 3.14 Lambda functions, all sharing `costs.py`
+  - `cost-tools` — returns `TOOL_REGISTRY` as JSON for proxy self-configuration
+  - Six cost query functions — each calls Cost Explorer and returns a plain-text summary
   - Independently deployable with scoped IAM roles per function
 
 - **Amazon API Gateway:**
-  - HTTP API (`costs-api`) with six POST routes, all requiring SigV4 signing
+  - HTTP API (`costs-api`) with seven routes, all requiring SigV4 signing
+  - `GET /tools` — discovery endpoint; returns tool registry with names, schemas, and routes
+  - Six `POST /cost/*` routes — one per MCP tool
   - `$default` stage with auto-deploy enabled
   - No CORS — API is designed for server-side proxy callers only
 
@@ -128,6 +136,28 @@ suitable for direct AI narration.
 
 > Note: All routes require **AWS IAM authorization**. The local proxy signs every
 > request with SigV4 using the credentials of the `cost-mcp-proxy` IAM user.
+
+### Discovery Endpoint
+
+The proxy calls `GET /tools` at startup to self-configure. The `cost-tools`
+Lambda returns `TOOL_REGISTRY` from `costs.py` — the single source of truth for
+all tool metadata:
+
+```json
+[
+  {
+    "name": "get_month_to_date_cost",
+    "description": "Returns total AWS spend from the first of this month through today.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "route": "/cost/month-to-date"
+  },
+  ...
+]
+```
+
+The proxy strips `route` before forwarding tool schemas to the AI — the AI sees
+only the standard MCP fields. Adding a new tool requires only a backend deploy;
+the proxy picks it up automatically on next start with no proxy changes required.
 
 ### Tool Summary
 
@@ -179,14 +209,10 @@ AWS cost forecast — remaining April 2026 (2026-04-27 through 2026-04-30):
 
 ### Request & Response Characteristics
 
-| Aspect | Behavior |
-|--------|----------|
-| Authentication | AWS IAM (SigV4 required) |
-| HTTP Method | `POST` for all tools |
-| Request Body | Empty JSON object `{}` |
-| Content Type | `text/plain` |
-| Response Format | Plain-text human-readable summary |
-| Clients | MCP proxy (via Claude Desktop or Claude Code) |
+| Endpoint | Method | Auth | Request Body | Response |
+|----------|--------|------|--------------|----------|
+| `/tools` | `GET` | AWS IAM | none | JSON array of tool descriptors |
+| `/cost/*` | `POST` | AWS IAM | `{}` | Plain-text human-readable summary |
 
 ---
 

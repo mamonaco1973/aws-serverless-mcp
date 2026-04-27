@@ -35,98 +35,6 @@ Together, these components form a **reference architecture for serverless MCP
 tool backends on AWS** — demonstrating how AI tools can be centrally deployed,
 versioned, and secured without requiring local runtimes on the caller's machine.
 
-## MCP Tools
-
-The **Cost Explorer MCP API** exposes six tools through **Amazon API Gateway
-(HTTP API)**. All tools take no input parameters and return plain-text summaries
-suitable for direct AI narration.
-
-> Note: All routes require **AWS IAM authorization**. The local proxy signs every
-> request with SigV4 using the credentials of the `cost-mcp-proxy` IAM user.
-
-### Tool Summary
-
-| Tool | Route | Lambda | Description |
-|------|-------|--------|-------------|
-| `get_month_to_date_cost` | `POST /cost/month-to-date` | `cost-mtd` | Total AWS spend from the 1st of this month through today |
-| `get_cost_by_service` | `POST /cost/by-service` | `cost-by-service` | MTD spend broken down by AWS service, sorted descending |
-| `compare_this_month_to_last_month` | `POST /cost/compare-months` | `cost-compare` | This month MTD vs last month full total |
-| `get_daily_cost_trend` | `POST /cost/daily-trend` | `cost-daily` | Day-by-day spend for the current month with running totals |
-| `find_top_cost_drivers` | `POST /cost/top-drivers` | `cost-top-drivers` | Top 10 AWS services by spend with percentage share |
-| `forecast_month_end_cost` | `POST /cost/forecast` | `cost-forecast` | Projected remaining spend through end of month (80% CI) |
-
-### Example Tool Responses
-
-**`get_month_to_date_cost`**
-```
-Month-to-date AWS cost (2026-04-01 through 2026-04-27): $142.38 USD
-```
-
-**`get_cost_by_service`**
-```
-AWS cost by service (2026-04-01 through 2026-04-27):
-  Amazon EC2: $87.14
-  Amazon RDS: $31.20
-  AWS Lambda: $12.50
-  Amazon S3: $8.91
-  ...
-```
-
-**`find_top_cost_drivers`**
-```
-Top AWS cost drivers (2026-04-01 through 2026-04-27):
-   1. Amazon EC2: $87.14 (61.2% of total)
-   2. Amazon RDS: $31.20 (21.9% of total)
-   3. AWS Lambda: $12.50 (8.8% of total)
-   ...
-
-  Total across all services: $142.38
-```
-
-**`forecast_month_end_cost`**
-```
-AWS cost forecast — remaining April 2026 (2026-04-27 through 2026-04-30):
-  Estimated remaining spend: $18.42
-  80% confidence range:      $14.10 – $23.75
-```
-
----
-
-### Request & Response Characteristics
-
-| Aspect | Behavior |
-|--------|----------|
-| Authentication | AWS IAM (SigV4 required) |
-| HTTP Method | `POST` for all tools |
-| Request Body | Empty JSON object `{}` |
-| Content Type | `text/plain` |
-| Response Format | Plain-text human-readable summary |
-| Clients | MCP proxy (via Claude Desktop or Claude Code) |
-
----
-
-## Architecture
-
-```
-AI assistant (Claude Desktop / Claude Code)
-     │  MCP stdio — JSON-RPC 2.0
-     ▼
-proxy.ps1 / proxy.sh  ← reads env vars for IAM credentials
-     │  HTTPS + AWS SigV4
-     ▼
-API Gateway (HTTP API v2) — costs-api
-     │  AWS_IAM authorization on all routes
-     ├── POST /cost/month-to-date  → Lambda: cost-mtd
-     ├── POST /cost/by-service     → Lambda: cost-by-service
-     ├── POST /cost/compare-months → Lambda: cost-compare
-     ├── POST /cost/daily-trend    → Lambda: cost-daily
-     ├── POST /cost/top-drivers    → Lambda: cost-top-drivers
-     └── POST /cost/forecast       → Lambda: cost-forecast
-                │
-                ▼
-     AWS Cost Explorer API (global, us-east-1)
-```
-
 ## Prerequisites
 
 * [An AWS Account](https://aws.amazon.com/console/) with Cost Explorer enabled
@@ -209,3 +117,79 @@ When the deployment completes, the following resources are created:
 Together, these resources form a **clean serverless MCP backend** that demonstrates
 how AI tool servers can be centrally deployed and IAM-secured on AWS — scalable,
 auditable, and accessible to any MCP-compatible client via a thin local proxy.
+
+---
+
+## MCP Tools
+
+The **Cost Explorer MCP API** exposes six tools through **Amazon API Gateway
+(HTTP API)**. All tools take no input parameters and return plain-text summaries
+suitable for direct AI narration.
+
+> Note: All routes require **AWS IAM authorization**. The local proxy signs every
+> request with SigV4 using the credentials of the `cost-mcp-proxy` IAM user.
+
+### Tool Summary
+
+| Tool | Route | Lambda | Description |
+|------|-------|--------|-------------|
+| `get_month_to_date_cost` | `POST /cost/month-to-date` | `cost-mtd` | Total AWS spend from the 1st of this month through today |
+| `get_cost_by_service` | `POST /cost/by-service` | `cost-by-service` | MTD spend broken down by AWS service, sorted descending |
+| `compare_this_month_to_last_month` | `POST /cost/compare-months` | `cost-compare` | This month MTD vs last month full total |
+| `get_daily_cost_trend` | `POST /cost/daily-trend` | `cost-daily` | Day-by-day spend for the current month with running totals |
+| `find_top_cost_drivers` | `POST /cost/top-drivers` | `cost-top-drivers` | Top 10 AWS services by spend with percentage share |
+| `forecast_month_end_cost` | `POST /cost/forecast` | `cost-forecast` | Projected remaining spend through end of month (80% CI) |
+
+### Example Tool Responses
+
+**`get_month_to_date_cost`**
+```
+Month-to-date AWS cost (2026-04-01 through 2026-04-27): $142.38 USD
+```
+
+**`get_cost_by_service`**
+```
+AWS cost by service (2026-04-01 through 2026-04-27):
+  Amazon EC2: $87.14
+  Amazon RDS: $31.20
+  AWS Lambda: $12.50
+  Amazon S3: $8.91
+  ...
+```
+
+**`find_top_cost_drivers`**
+```
+Top AWS cost drivers (2026-04-01 through 2026-04-27):
+   1. Amazon EC2: $87.14 (61.2% of total)
+   2. Amazon RDS: $31.20 (21.9% of total)
+   3. AWS Lambda: $12.50 (8.8% of total)
+   ...
+
+  Total across all services: $142.38
+```
+
+**`forecast_month_end_cost`**
+```
+AWS cost forecast — remaining April 2026 (2026-04-27 through 2026-04-30):
+  Estimated remaining spend: $18.42
+  80% confidence range:      $14.10 – $23.75
+```
+
+---
+
+### Request & Response Characteristics
+
+| Aspect | Behavior |
+|--------|----------|
+| Authentication | AWS IAM (SigV4 required) |
+| HTTP Method | `POST` for all tools |
+| Request Body | Empty JSON object `{}` |
+| Content Type | `text/plain` |
+| Response Format | Plain-text human-readable summary |
+| Clients | MCP proxy (via Claude Desktop or Claude Code) |
+
+---
+
+## MCP Proxy Request Flow
+
+![flow](aws-serverless-mcp-flow.png)

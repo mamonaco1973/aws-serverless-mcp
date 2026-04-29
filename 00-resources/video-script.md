@@ -1,18 +1,12 @@
-# Video Script — Serverless CRUD API on AWS with Lambda and DynamoDB
+# Video Script 
 
 ---
 
-[ Screen recording of the Notes Demo web app — creating, editing, and deleting notes in the browser ]
+Do you need a clean way to run MCP backends on AWS — securely, without managing servers?
 
-"Do you need a secure, authenticated serverless API on AWS?"
+In this project, we implement a reusable MCP pattern using API Gateway, Lambda, and IAM authorization.
 
-[ Architecture diagram — highlight flow: browser → Cognito → API Gateway → Lambda → DynamoDB ]
-
-"In this project we build a fully serverless notes API using API Gateway, Lambda, and DynamoDB — secured with Cognito and provisioned entirely with Terraform."
-
-[ Terminal running apply.sh — Terraform output, ending with website URL ]
-
-"Follow along and in minutes you'll have a working, authenticated API running in your own AWS account."
+Follow along, and in minutes you’ll have a working backend that any AI client can use to call your serverless tools on AWS.
 
 ---
 
@@ -22,22 +16,48 @@
 
 "Let's walk through the architecture before we build."
 
-[ Highlight browser and S3 bucket ]
+[ Highlight: Claude Desktop ]
 
-"The user opens a static web page — which is just an HTML file served directly from a public S3 bucket."
+We start with the AI client — in this case, Claude Desktop - issuing MCP tool calls over standard JSON-RPC.
 
-[ Highlight API Gateway ]
+[ Highlight: MCP Proxy ]
 
-"The frontend talks to an API Gateway HTTP API which is attached to our lambdas."
+Those calls are handled by a lightweight MCP proxy.
 
-[ Highlight Lambda functions ]
+The proxy acts as a bridge — translating local MCP requests into HTTPS calls.
 
-"Each Lambda function handles exactly one thing — POST to create, GET to list, GET by ID to retrieve, PUT to update, DELETE to delete.
+[ Highlight: IAM Access Key ]
 
-[ Highlight DynamoDB ]
+The proxy uses IAM credentials to sign every request, so nothing reaches AWS without authentication.
 
-"The backend stores data in DynamoDB. Each note is a JSON document, and the lambdas read and write directly to it."
+[ Highlight: API Gateway ]
 
+API Gateway is the entry point for the backend.
+
+Every route is protected using AWS IAM authorization.
+
+---
+
+[ Highlight: Lambda + costs.py ]
+
+Behind API Gateway, each route invokes a Lambda function.
+
+
+---
+
+[ Highlight: Arrow to Cost Explorer ]
+
+These functions call AWS services directly — here, the Cost Explorer API — to retrieve data.
+
+---
+
+[ Full diagram highlight ]
+
+So from the AI’s perspective, this looks like a local tool server.
+
+But in reality, every request is securely routed through API Gateway and executed in Lambda using IAM.
+
+That’s the core pattern.
 ---
 
 ## Build the Code
@@ -70,35 +90,51 @@
 
 ## Build Results
 
-[ AWS Console — us-east-1 resources ]
+[ Show API Gateway ]
 
-"Let's look at what was deployed."
+1. An HTTP API Gateway is created as the entry point for all MCP tool calls.
 
-[ AWS Console — API Gateway, notes-api ]
+---
 
-"First is the API Gateway. This is the entry point for every API call."
+[ Show Authorization Tab ]
 
-[ Show Routes ]
+2. All routes are secured with AWS IAM authorization, so every request must be IAM signed.
 
-"These are the five routes — each one wired to its own Lambda integration."
+---
 
-[ AWS Console — Lambda functions list ]
+[ Show IAM User ]
 
-"We have five Lambda functions — one per operation. 
-Each has its own IAM role scoped to only the DynamoDB actions it needs."
+3. A dedicated IAM user is created for the proxy with permission to invoke the API only.
 
-[ AWS Console — DynamoDB table, notes ]
+---
 
-"Next is the DynamoDB table which is the storage layer for our notes.
+[ Show Secrets Manager ]
 
-[ AWS Console — S3 bucket, static website ]
+4. Those credentials are stored in Secrets Manager and used by the proxy for request signing.
 
-"Finally, a public S3 bucket hosts the static web application."
+---
 
-[ Browser — Notes Demo loads ]
+[ Show Lambdas ]
 
-"Open the website URL to launch the test application."
+5. Multiple Lambda functions are deployed - one per tool, plus a discovery endpoint.
 
+---
+
+[ Show Python Code ]
+
+6. All tool logic is implemented in Python, with each handler calling Cost Explorer.
+
+---
+
+[ Show Tools Registry ]
+
+7.A central tool registry defines all available tools, and this  is used by the proxy for dynamic configuration.
+
+---
+
+[ Show Desktop JSON ]
+
+8. Finally, example client configuration files are generated, allowing the MCP client to connect to the backend.
 ---
 
 ## Demo
@@ -138,7 +174,7 @@ Each has its own IAM role scoped to only the DynamoDB actions it needs."
 [ Show network ]
 
 "A DELETE call is made — and the note is removed."
-
+ 
 [ Browser — empty list ]
 
 "In this demo, we've now exercised every API endpoint."

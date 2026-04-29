@@ -1,34 +1,40 @@
-#AWS #Serverless #AWSLambda #DynamoDB #APIGateway #Terraform #Python #CRUD
+#AWS #MCP #ModelContextProtocol #AWSLambda #APIGateway #Terraform #Python #ClaudeDesktop #Serverless #IAM
 
-*Build a Serverless CRUD API on AWS (API Gateway + DynamoDB)*
+*Build a Serverless MCP Backend on AWS (Lambda + API Gateway + SigV4)*
 
-Deploy a fully serverless notes API on AWS using Terraform, Lambda, API Gateway, and DynamoDB. The backend runs on five Python Lambda functions — one per HTTP route — routed through an API Gateway HTTP API v2, with a static web frontend served directly from S3.
+What if your AI assistant could query your AWS costs just by asking? In this project we build a fully serverless MCP backend using API Gateway, Lambda, and AWS IAM — then connect it to Claude Desktop and OpenAI Codex using a lightweight stdio proxy.
 
-In this project we build a clean REST API with full Create, Read, Update, and Delete support — wired to a real database, deployed with a single script, and tested through a browser-based UI with no server to manage.
+The proxy makes the remote AWS backend look like a local MCP server. The AI never knows the difference — but every request is signed with SigV4 and authorized by IAM before a single Lambda function runs.
+
+Six cost tools are exposed as MCP tools: month-to-date spend, cost by service, month-over-month comparison, daily trend, top drivers, and a month-end forecast. A seventh endpoint acts as a self-configuring tool registry — the proxy discovers routes at startup, so adding a new tool requires no proxy changes.
+
+This pattern works with Claude Desktop, OpenAI Codex, Cursor, and any other MCP client that supports stdio transport.
 
 WHAT YOU'LL LEARN
-• Deploying five Lambda functions (one per HTTP route) with Terraform
-• Wiring API Gateway HTTP API v2 routes to Lambda integrations
-• Provisioning DynamoDB with composite keys and least-privilege IAM roles
-• Hosting a static web frontend on S3
-• Injecting runtime config into HTML templates using envsubst
+• The serverless MCP backend pattern — remote tools that look local to any AI client
+• Writing a stdio MCP proxy in Bash (and PowerShell) that signs requests with AWS SigV4
+• Securing API Gateway routes with AWS_IAM authorization (no API keys to rotate)
+• Applying least-privilege IAM — one scoped role per Lambda, one proxy user with invoke-only rights
+• Implementing self-configuring tool discovery via a /tools registry endpoint
+• Storing and retrieving proxy credentials from Secrets Manager
 
 INFRASTRUCTURE DEPLOYED
-• API Gateway HTTP API v2 (notes-api)
-• Five Lambda functions (Python 3.14, one per route: create/list/get/update/delete)
-• Five IAM roles with least-privilege DynamoDB policies per operation
-• DynamoDB table (PAY_PER_REQUEST, PK=owner, SK=id)
-• S3 bucket hosting a static web frontend
+• API Gateway HTTP API v2 (costs-api) — 7 routes, all AWS_IAM authorized
+• 7 Lambda functions (Python 3.14) — 6 cost query tools + 1 tool registry
+• 7 IAM roles with scoped Cost Explorer permissions per function
+• IAM user (cost-mcp-proxy) scoped to execute-api:Invoke on this API only
+• Secrets Manager secret storing proxy credentials (key ID, secret, endpoint, region)
+• MCP proxy (proxy.sh / proxy.ps1) — stdio bridge with SigV4 signing
 
 GitHub
-https://github.com/mamonaco1973/aws-crud-example
+https://github.com/mamonaco1973/aws-serverless-mcp
 
 README
-https://github.com/mamonaco1973/aws-crud-example/blob/main/README.md
+https://github.com/mamonaco1973/aws-serverless-mcp/blob/main/README.md
 
 TIMESTAMPS
 00:00 Introduction
 00:17 Architecture
-00:46 Build the Code
-01:02 Build Results
-01:33 Demo
+00:55 Build the Code
+01:45 Build Results
+03:00 Demo

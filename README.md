@@ -1,11 +1,11 @@
 # AWS Serverless MCP — Cost Explorer API
 
 This project delivers a **serverless MCP (Model Context Protocol) backend** on
-AWS that lets an AI assistant query AWS costs in plain English. Six Lambda
-functions expose cost query tools behind an **Amazon API Gateway HTTP API**
-secured with **AWS IAM authorization**. A lightweight local proxy signs each
-request with SigV4, making the remote serverless API completely transparent to
-the AI caller.
+AWS that lets an AI assistant query AWS costs in plain English. Seven Lambda
+functions — six cost query tools plus a self-configuring tool registry — sit
+behind an **Amazon API Gateway HTTP API** secured with **AWS IAM authorization**.
+A lightweight local proxy signs each request with SigV4, making the remote
+serverless API completely transparent to the AI caller.
 
 It uses **Terraform** and **Python (boto3)** to provision and deploy the backend,
 and a **PowerShell or Bash proxy script** to bridge the MCP stdio transport to
@@ -47,6 +47,8 @@ versioned, and secured without requiring local runtimes on the caller's machine.
 * [Install AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 * [Install Terraform](https://developer.hashicorp.com/terraform/install)
 * `jq` in PATH (used by `apply.sh` and `validate.sh`)
+* `bash 4+`, `curl`, `openssl` (used by `proxy.sh` for SigV4 signing)
+* `envsubst` in PATH (used by `apply.sh` to generate proxy config files)
 
 If this is your first time following along, we recommend starting with this video:  
 **[AWS + Terraform: Easy Setup](https://www.youtube.com/watch?v=9clW3VQLyxA)** – it walks through configuring your AWS credentials, Terraform backend, and CLI environment.
@@ -86,7 +88,7 @@ When the deployment completes, the following resources are created:
   - Single-phase deploy from the `01-lambdas` directory
 
 - **Security & IAM:**
-  - Six Lambda execution roles, each scoped to the exact Cost Explorer action it needs
+  - Seven Lambda execution roles — six scoped to specific Cost Explorer actions, one (cost-tools) with CloudWatch Logs only
   - `cost-mcp-proxy` IAM user with `execute-api:Invoke` only — cannot call CE directly
   - Proxy IAM credentials stored in Secrets Manager secret `cost-mcp-proxy`
   - All API Gateway routes enforce `AWS_IAM` authorization — no unsigned access possible
@@ -109,11 +111,14 @@ When the deployment completes, the following resources are created:
   - `02-proxy/proxy.sh` — Bash proxy using `openssl` for signing (Linux / Git Bash / macOS)
   - Both implement full MCP JSON-RPC 2.0 stdio transport with SigV4 request signing
 
-- **Claude Desktop Integration:**
+- **MCP Client Integration:**
+  - The proxy speaks standard MCP JSON-RPC 2.0 over stdio and works with any
+    compatible client: Claude Desktop, OpenAI Codex, Cursor, or any host that
+    supports stdio transport
   - `apply.sh` generates `02-proxy/claude_desktop_config_ps1.json` and
     `02-proxy/claude_desktop_config_sh.json` with real credentials substituted from
-    Secrets Manager — copy the appropriate file to
-    `%APPDATA%\Claude\claude_desktop_config.json` and restart Claude Desktop
+    Secrets Manager — copy the appropriate file into your MCP client's config and
+    update the proxy script path
 
 - **Automation & Validation:**
   - `apply.sh`, `destroy.sh`, and `check_env.sh` automate provisioning, teardown,

@@ -139,44 +139,14 @@ That’s the core pattern.
 
 ## Demo
 
-[ Browser — Notes Demo, open DevTools → Network tab ]
-
-"Open the web app — and the browser debugger so we can watch the API calls."
-
-[ Refresh page — network calls visible ]
-
-"When the app loads, it calls the list endpoint. No notes yet."
-
-[ Clicking New — modal opens, typing a title, clicking Create ]
-
-"Now let's create a new note by selecting New."
-
-[ Show API working ]
-
-"A POST to the API is made which returns an ID."
-
-[ Clicking the note in the list ]
-
-"The new note is also selected and the API loads the content."
-
-[ Editing and clicking Save ]
-
-"Now let's update the note and select Save."
-
-[ Show network tab ]
-
-"A PUT call is made — and the updated data is stored in DynamoDB."
-
-[ Clicking Delete ]
-
-"Now let's delete the note by selecting Delete."
-
-[ Show network ]
-
-"A DELETE call is made — and the note is removed."
- 
-[ Browser — empty list ]
-
-"In this demo, we've now exercised every API endpoint."
+First update your AI client configuration — here I’m using Claude Desktop.
+Restart the client.
+Confirm it recognizes the serverless MCP.
+Now let’s ask: What’s my monthly spend?
+You’ll get a month-to-date total.
+Next, break it down by service.
+Now you can see exactly where the costs are coming from.
+Finally, ask if there are any trends.
+Here it flags a spike — driven by my AI projects this month.
 
 ---
